@@ -72,6 +72,7 @@ pub fn copy_objects(doc: &Document, page: usize, targets: &[ObjectTarget]) -> Re
     let ops = pieces.parse().ops;
     let mut keep = crate::text::paragraph_ops(doc, page, &indexes(ObjectKind::Text), false)?;
     keep.extend(crate::images::image_ops(doc, page, &indexes(ObjectKind::Image))?);
+    keep.extend(crate::paths::path_ops(doc, page, &indexes(ObjectKind::Path))?);
     // Added content owns its stream: everything that stream paints is the item.
     let added: Vec<_> = crate::list_added(doc).into_iter().filter(|a| a.page == page).collect();
     let owned = indexes(ObjectKind::Added)

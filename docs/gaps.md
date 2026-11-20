@@ -117,10 +117,11 @@ update the numbers.
 - **Missing:** robust in-place editing of text PdfCraft didn't write: subset fonts without the
   needed glyphs, CJK and right-to-left text, rotated text, lists, superscript/subscript, keeping
   structure tags, find and replace beyond plain paragraphs (form fields, comments, matches across
-  paragraphs); vector and object editing; arrange and align.
+  paragraphs); node-level vector editing, gradients, inline images and paths inside a Form;
+  arrange and align. Selecting, deleting, recoloring and moving painted page paths is partial.
 - **Evidence:** `edit.text-edit` is partial (font reused or Helvetica substituted);
   `edit.rtl-cjk-editing`, `edit.rotated-text-editing`, `edit.keep-tags-on-edit`,
-  `edit.vector-edit`, `edit.edit-object-tool` are planned. Users:
+  `edit.vector-edit` and `edit.edit-object-tool` are partial. Users:
   [#766](https://github.com/storytold/pdfcraft/issues/766) (editing Arabic text),
   [#844](https://github.com/storytold/pdfcraft/issues/844) (several elements now move together on
   one page, not across pages),

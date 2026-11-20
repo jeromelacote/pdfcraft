@@ -347,8 +347,16 @@ impl Automation {
             .iter()
             .map(|o| {
                 let rect = crate::comments::rect_to_view(info, o.rect.map(|v| v as f32));
-                json!({"kind":o.target.kind.as_str(),"index":o.target.index.saturating_add(1),"type":o.content_type,
-                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0),"text":o.text})
+                let mut item = json!({"kind":o.target.kind.as_str(),"index":o.target.index.saturating_add(1),"type":o.content_type,
+                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0),"text":o.text});
+                let round = |c: [f64; 3]| c.map(|v| (v * 10000.0).round() / 10000.0);
+                if let Some(fill) = o.fill {
+                    item["fill"] = json!(round(fill));
+                }
+                if let Some(stroke) = o.stroke {
+                    item["stroke"] = json!(round(stroke));
+                }
+                item
             })
             .collect::<Vec<_>>();
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
@@ -390,7 +398,8 @@ impl Automation {
                 Some("added") => ObjectKind::Added,
                 Some("text") => ObjectKind::Text,
                 Some("image") => ObjectKind::Image,
-                _ => return Err(bad("object kind must be added, text or image (see object_list)")),
+                Some("path") => ObjectKind::Path,
+                _ => return Err(bad("object kind must be added, text, image or path (see object_list)")),
             };
             let index = row
                 .get("index")
@@ -455,4 +464,38 @@ impl Automation {
         result["pasted"] = json!(count);
         Ok(result)
     }
+
+    /// Recolor the fill and/or stroke of painted paths from object_list. One undo step.
+    pub(crate) fn object_recolor(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let targets = self.object_targets(a, page)?;
+        if targets.iter().any(|t| t.kind != pdfcraft_engine::ObjectKind::Path) {
+            return Err(bad("object_recolor accepts only kind path"));
+        }
+        let fill = rgb_arg(a, "fill")?;
+        let stroke = rgb_arg(a, "stroke")?;
+        if fill.is_none() && stroke.is_none() {
+            return Err(bad("give a fill or a stroke colour"));
+        }
+        let indexes: Vec<_> = targets.iter().map(|t| t.index).collect();
+        let count = indexes.len();
+        let mut result = self.apply(a, Edit::EditPaths { page, indexes, change: pdfcraft_engine::PathEdit::Recolor { fill, stroke } })?;
+        result["recolored"] = json!(count);
+        Ok(result)
+    }
+}
+
+fn rgb_arg(a: &Args, key: &str) -> Result<Option<[f64; 3]>> {
+    let Some(v) = a.get(key) else { return Ok(None) };
+    if let Some(s) = v.as_str() {
+        return Ok(Some(crate::comments::parse_color(s)?));
+    }
+    let nums: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+    let Ok(rgb) = <[f64; 3]>::try_from(nums) else {
+        return Err(bad(format!("{key} must be [r, g, b] from 0 to 1, or a #RRGGBB colour")));
+    };
+    if !rgb.iter().all(|n| n.is_finite() && (0.0..=1.0).contains(n)) {
+        return Err(bad(format!("{key} must be [r, g, b] from 0 to 1, or a #RRGGBB colour")));
+    }
+    Ok(Some(rgb))
 }

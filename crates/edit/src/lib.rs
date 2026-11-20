@@ -46,9 +46,11 @@ pub use background::page_background;
 mod rules;
 pub use rules::page_rules;
 pub mod objects;
+pub mod paths;
 pub use objects::{
     CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, paste_objects,
 };
+pub use paths::{PagePath, PathEdit, edit_paths, page_paths};
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};

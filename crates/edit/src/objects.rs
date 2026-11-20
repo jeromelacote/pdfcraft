@@ -23,6 +23,8 @@ pub enum ObjectKind {
     Added,
     Text,
     Image,
+    /// A painted path in the page content stream. Clip-only paths are not objects.
+    Path,
 }
 
 impl ObjectKind {
@@ -31,6 +33,7 @@ impl ObjectKind {
             Self::Added => "added",
             Self::Text => "text",
             Self::Image => "image",
+            Self::Path => "path",
         }
     }
 }
@@ -49,6 +52,10 @@ pub struct EditableObject {
     pub rect: [f64; 4],
     pub content_type: &'static str,
     pub text: Option<String>,
+    /// Device fill as RGB, for a painted path that fills.
+    pub fill: Option<[f64; 3]>,
+    /// Device stroke as RGB, for a painted path that strokes.
+    pub stroke: Option<[f64; 3]>,
 }
 
 fn valid_rect(rect: [f64; 4]) -> bool {
@@ -74,6 +81,8 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
             rect: geometry.get(index).ok_or_else(|| EditError::Invalid("an added item has no placement".into()))?.rect,
             content_type,
             text,
+            fill: None,
+            stroke: None,
         });
     }
     for (index, b) in crate::text::selectable_blocks(doc, page, &excluded)? {
@@ -82,6 +91,8 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
             rect: b.rect,
             content_type: "text",
             text: Some(b.text),
+            fill: None,
+            stroke: None,
         });
     }
     for (index, image) in crate::images::selectable_images(doc, page, &excluded)? {
@@ -91,6 +102,21 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
             rect,
             content_type: if image.is_form { "form" } else { "image" },
             text: None,
+            fill: None,
+            stroke: None,
+        });
+    }
+    // Paths after text and images. Text stays the earlier hit in the UI; among paths and
+    // images the later paint wins. A page-sized clip is not a path.
+    let room = MAX_PAGE_OBJECTS.saturating_sub(objects.len());
+    for path in crate::paths::page_paths(doc, page)?.into_iter().take(room) {
+        objects.push(EditableObject {
+            target: ObjectTarget { kind: ObjectKind::Path, index: path.index },
+            rect: path.rect,
+            content_type: "path",
+            text: None,
+            fill: path.fill,
+            stroke: path.stroke,
         });
     }
     if objects.len() > MAX_PAGE_OBJECTS {
@@ -129,6 +155,7 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     crate::text::translate_blocks(&mut work, page, &indexes(ObjectKind::Text), offset)?;
     crate::images::translate_images(&mut work, page, &indexes(ObjectKind::Image), offset)?;
     translate_added(&mut work, page, &indexes(ObjectKind::Added), offset)?;
+    crate::paths::translate_paths(&mut work, page, &indexes(ObjectKind::Path), offset)?;
     // Placement operators add to size/depth/work budgets, and moving paragraphs can change
     // their grouping. Keep the resulting inventory usable; refuse before swapping otherwise.
     editable_objects(&work, page)?;

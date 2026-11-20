@@ -39,14 +39,17 @@ here or in another application, wins ⌘V. Text drawn as a clipping path before 
 refused, as is artwork without resources of its own that names one, where a paste would change it.
 
 The supported items are the existing paragraph boxes, raster Image XObjects, whole Form artwork,
-and text/images added by PdfCraft. A Form remains one item, including its nested artwork and
-resources. Added items appear once in the selection inventory. Selections stay on one page and
-contain at most 1,000 items; pages with more than 10,000 recognised objects are refused for group
-selection. Content streams must decode completely within 64 MiB each and 128 MiB per page, with
-a 1,024-level graphics-state limit and 100,000 content operations. These limits apply to both the
-original page and the moved result; unreadable or missing streams are refused. Moving between pages,
-arbitrary paths, inline images, group resizing, align/distribute,
-and vertical or clipping text are outside this operation's scope. A refusal changes nothing.
+painted paths, and text/images added by PdfCraft. A Form remains one item, including its nested
+artwork and resources. A clip-only path is not an item. A painted path that also clips other
+content is refused for a move, copy or delete, and the page is left unchanged; it can still be
+recolored with `object_recolor`. Added items appear once in the selection inventory. Selections
+stay on one page and contain at most 1,000 items; pages with more than 10,000 recognised objects
+are refused for group selection. Content streams must decode completely within 64 MiB each and
+128 MiB per page, with a 1,024-level graphics-state limit and 100,000 content operations. These
+limits apply to both the original page and the moved result; unreadable or missing streams are
+refused. Moving between pages, inline images, paths inside a Form, group resizing,
+align/distribute, and vertical or clipping text are outside this operation's scope. A refusal
+changes nothing.
 
 Added streams move by changing their outer placement, preserving drawing bytes, fonts, crop paths,
 and image transforms even if the page was rotated after the item was added. Their original local
@@ -75,7 +78,9 @@ re-list after changes; the automation generation guard detects stale references 
 ## CLI and MCP
 
 Both frontends use the same tools. `object_list` returns a document `generation` and items with
-`kind` (`added`, `text`, or `image`), 1-based `index`, `type`, displayed `rect`, and optional `text`.
+`kind` (`added`, `text`, `image`, or `path`), 1-based `index`, `type`, displayed `rect`, and optional `text`.
+A path may also include `fill` and `stroke` as RGB components from 0 to 1. `object_recolor` changes
+those colours for one or more paths in one undo step.
 Treat those references as belonging to that generation and pass it back when moving:
 
 ```json

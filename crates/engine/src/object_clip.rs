@@ -150,6 +150,7 @@ fn delete_one(page: usize, t: ObjectTarget) -> Edit {
         ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
         ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
         ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+        ObjectKind::Path => Edit::EditPaths { page, indexes: vec![t.index], change: pdfcraft_edit::PathEdit::Delete },
     }
 }
 

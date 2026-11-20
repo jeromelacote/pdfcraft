@@ -316,6 +316,12 @@ impl Document {
         pdfcraft_edit::editable_objects(&editor.cos, page).map_err(|e| e.to_string())
     }
 
+    /// Painted paths on `page` (0-based), in content order. Clip-only paths are omitted.
+    pub fn page_paths(&self, page: usize) -> Result<Vec<pdfcraft_edit::PagePath>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        pdfcraft_edit::page_paths(&editor.cos, page).map_err(|e| e.to_string())
+    }
+
     /// Displayed top-left-origin motion to a user-space vector. Use the linear map only,
     /// so even a large crop-box origin cannot erase a small drag by cancellation.
     pub fn object_move_offset(&self, page: usize, delta: [f64; 2]) -> Result<[f64; 2], String> {

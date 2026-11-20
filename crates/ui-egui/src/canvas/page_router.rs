@@ -36,6 +36,8 @@ pub(crate) enum Owner {
     Paragraph { block: usize, part: ParagraphPart },
     /// Edit text: a picture, by its index among the page's, and what of it a press takes.
     Picture { index: usize, part: PicturePart },
+    /// Edit text: a painted path, by its index in the path inventory.
+    Path { index: usize },
     /// Edit text: the objects selected together, or the frame of the paragraph open for typing.
     Objects { part: ObjectsPart },
     /// Added text or a picture placed on the page, by its index among the page's, and a corner of

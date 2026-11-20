@@ -509,6 +509,12 @@ pub enum Edit {
         index: usize,
         change: ImageEdit,
     },
+    /// Delete or recolor painted paths (`indexes` from the path inventory on `page`).
+    EditPaths {
+        page: usize,
+        indexes: Vec<usize>,
+        change: pdfcraft_edit::PathEdit,
+    },
     /// Move mixed existing and added objects together. References resolve before any change;
     /// offset is a user-space vector. No retyping, reflow or font substitution is involved.
     MoveObjects {

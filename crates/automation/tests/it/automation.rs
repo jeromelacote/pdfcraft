@@ -11702,6 +11702,58 @@ fn mixed_objects_move_through_tools_with_generation_and_one_undo() {
     assert!(page_text(&mut a, reopened)[0].contains("Added label"));
 }
 
+#[test]
+fn painted_paths_recolor_and_cut_through_tools() {
+    let dir = workdir("path-recolor");
+    let content = "0.5 g\n0 0 40 20 re\nf\nBT /F1 12 Tf 10 40 Td (Hello) Tj ET\n";
+    std::fs::write(dir.join("path.pdf"), path_page(content)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"path.pdf"}))["doc"].as_u64().unwrap();
+    let listed = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let objects = listed["objects"].as_array().unwrap();
+    let path = objects.iter().find(|o| o["kind"] == "path").unwrap();
+    assert_eq!(path["fill"], json!([0.5, 0.5, 0.5]));
+    assert!(objects.iter().any(|o| o["text"] == "Hello"));
+    let recolored = ok(&mut a, "object_recolor", json!({"doc":doc,"page":1,"generation":listed["generation"],"objects":[{"kind":"path","index":path["index"]}],"fill":[1.0, 0.0, 0.0]}));
+    assert_eq!(recolored["recolored"], 1);
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let fill = after["objects"].as_array().unwrap().iter().find(|o| o["kind"] == "path").unwrap()["fill"].clone();
+    assert_eq!(fill, json!([1.0, 0.0, 0.0]));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"recolored.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"recolored.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"].as_array().unwrap().iter().find(|o| o["kind"] == "path").unwrap()["fill"], json!([1.0, 0.0, 0.0]));
+    let generation = ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["generation"].clone();
+    ok(&mut a, "object_copy", json!({"doc":doc,"page":1,"cut":true,"generation":generation,"objects":[{"kind":"path","index":path["index"]}]}));
+    let cut = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert!(cut["objects"].as_array().unwrap().iter().all(|o| o["kind"] != "path"));
+    assert!(page_text(&mut a, doc)[0].contains("Hello"));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"].as_array().unwrap().iter().any(|o| o["kind"] == "path"));
+}
+
+fn path_page(content: &str) -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 /// Edit a PDF's ⌘A, ⌘C / ⌘X and ⌘V headlessly: every object of a page copied, pasted into
 /// another document and onto its own page (stepped down and right), and cut as one undo step.
 #[test]

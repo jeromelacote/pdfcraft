@@ -758,6 +758,7 @@ impl Automation {
             "object_move" => self.object_move(&a)?,
             "object_copy" => self.object_copy(&a)?,
             "object_paste" => self.object_paste(&a)?,
+            "object_recolor" => self.object_recolor(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,

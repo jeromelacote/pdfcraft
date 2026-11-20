@@ -184,6 +184,9 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             _ => None,
         };
         crate::edit_text_ui::picture_context(i, picture, view);
+        if let Some(Owner::Path { index }) = context {
+            crate::object_ui::select_target(view, doc, i, pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::Path, index });
+        }
     }
     // A mark already placed takes its own press (comments, below), as does one being moved on this
     // page until its move ends; with no button down the Fill & Sign tool's preview hides where a
@@ -550,12 +553,31 @@ impl PageHits<'_> {
         let on_top = top(reached.iter().cloned(), QuickTool::Select)?.owner;
         if self.tool == QuickTool::EditText && matches!(on_top, Owner::Added { .. } | Owner::Objects { part: crate::page_router::ObjectsPart::Frame })
         {
-            let pictures = reached.into_iter().filter(|h| matches!(h.owner, Owner::Picture { .. }));
-            return Some(top(pictures, QuickTool::Select).map_or(on_top, |h| h.owner));
+            let artwork = reached.into_iter().filter(|h| matches!(h.owner, Owner::Picture { .. } | Owner::Path { .. }));
+            return Some(top(artwork, QuickTool::Select).map_or(on_top, |h| h.owner));
         }
         Some(on_top)
     }
+}
 
+/// A picture and a painted path share one hit. The later paint is on top; a paragraph listed after
+/// this still wins, so a tint under a label does not take the click.
+fn top_artwork(picture: Option<crate::page_router::Hit>, path: Option<(crate::page_router::Hit, usize)>, images: &[pdfcraft_engine::PageImage]) -> Option<crate::page_router::Hit> {
+    match (picture, path) {
+        (Some(picture), Some((path_hit, path_order))) => {
+            let picture_order = match picture.owner {
+                Owner::Picture { index, .. } => images.get(index).map(|image| image.paint_order()).unwrap_or(0),
+                _ => 0,
+            };
+            Some(if path_order > picture_order { path_hit } else { picture })
+        }
+        (Some(picture), None) => Some(picture),
+        (None, Some((path_hit, _))) => Some(path_hit),
+        (None, None) => None,
+    }
+}
+
+impl PageHits<'_> {
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
     /// on top of artwork takes the press), added content, the objects selected together and the
     /// open paragraph's frame, the selected picture's grips over them all; the camera tool's corners;
@@ -596,7 +618,7 @@ impl PageHits<'_> {
         } = *self;
         // A press with Shift or ⌘ is the objects' (`object_ui::modified_hit`), off crop mode's page.
         if let Some(objects) = objects {
-            return crate::object_ui::modified_hit(view, xf, info, page, objects, clip, p).into_iter().collect();
+            return crate::object_ui::modified_hit(view, doc, xf, info, page, objects, clip, p).into_iter().collect();
         }
         // Crop mode holds every press on its page (`edit_text_ui::crop_hit`). A right-click is the
         // crop's only on the picture being cropped, its box or its grips (#5835), where it keeps crop
@@ -633,8 +655,10 @@ impl PageHits<'_> {
             // not on pictures, nor beside a paragraph, where a click starts a new box.
             let edit_text = tool == QuickTool::EditText;
             let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            let picture = edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten();
+            let path = edit_text.then(|| crate::object_ui::path_hit(view, doc, xf, info, page, p)).flatten();
             (
-                edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
+                top_artwork(picture, path, images),
                 on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
                 edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
                 edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
@@ -1008,7 +1032,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
     }
     if tool == QuickTool::EditText {
-        crate::object_ui::paint(painter, &xf, i, info, &view.objects);
+        crate::object_ui::paint(painter, &xf, i, info, doc, view, pointer);
     }
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::paint(painter, &xf, i, view);

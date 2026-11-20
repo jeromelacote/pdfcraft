@@ -20,8 +20,13 @@ deleting one use of a shared figure does not alter its other placements or pages
 **Replace Image** and **Save Image As** apply only to raster Image XObjects; these menu
 items are disabled for grouped Form artwork. **Ungroup** (right-click) draws one placement's
 content in place so its text and pictures can be edited; while grouped, the tool does not edit
-a Form's individual internal elements. It does not select arbitrary ungrouped vector paths or
-edit inline images (`BI`/`ID`/`EI`). A Form's bounding box may include whitespace.
+a Form's individual internal elements. Painted paths on the page — fills, strokes and curves —
+can be clicked, deleted, recolored and moved. A clip-only rectangle (`re W n` or `re W* n`,
+including the full-page clip around a text run) is not an object. Text wins a click over a tint
+under it. A path that also clips other content cannot be deleted or moved; recoloring it is
+allowed, and neighbours keep their colours. A pattern or shading can be deleted but not
+recolored. Paths inside a Form appear only after Ungroup. Inline images (`BI`/`ID`/`EI`) are
+still not selected. A Form's bounding box may include whitespace.
 
 For automation, `page_images` lists both kinds with `kind: "image"` or `kind: "form"`.
 Forms have `pixels: [0, 0]`, since they have no single bitmap resolution. Use the returned

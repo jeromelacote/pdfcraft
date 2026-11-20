@@ -94,6 +94,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::EditTextBlock { .. }
         | Edit::PrepareText { .. }
         | Edit::EditPageImage { .. }
+        | Edit::EditPaths { .. }
         | Edit::EnhanceScan { .. }
         | Edit::AddText { .. }
         | Edit::AddImage { .. }

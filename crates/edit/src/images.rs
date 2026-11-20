@@ -61,6 +61,11 @@ impl PageImage {
         self.clips.iter().any(|clip| clip.app_crop)
     }
 
+    /// The `Do`'s index among the page's joined operators. A later paint is drawn on top.
+    pub fn paint_order(&self) -> usize {
+        self.op
+    }
+
     /// The editing frame, respecting explicit PDF/editor crops but not the page boundary.
     /// Selected handles remain reachable outside the page; body hits still use `contains`.
     pub fn frame_rect(&self) -> Option<[f64; 4]> {

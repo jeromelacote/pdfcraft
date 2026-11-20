@@ -2205,6 +2205,12 @@ fn draw_pages(
             crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
             return;
         }
+        if tool == QuickTool::EditText
+            && let Some((page, Owner::Path { index })) = view.menu_for
+        {
+            crate::object_ui::path_context_menu(ui, view, doc, page, index);
+            return;
+        }
         // The comment the right-click went to, when it is the one selected, or connected lines being
         // drawn (Complete, Undo last point): the comment menu.
         let on_selected_comment =

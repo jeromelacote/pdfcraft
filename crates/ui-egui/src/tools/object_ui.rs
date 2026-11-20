@@ -1,6 +1,7 @@
 //! Same-page mixed selection in Edit a PDF. Source references belong to one document
 //! generation; a drag previews geometry and commits one engine edit on release.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -18,6 +19,8 @@ const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 pub(crate) struct ObjectSelection {
     generation: Option<u64>,
     cache: HashMap<usize, Result<Vec<EditableObject>, String>>,
+    /// Path geometry for hit testing, filled on demand and dropped when the document changes.
+    path_cache: RefCell<HashMap<usize, Vec<pdfcraft_engine::PagePath>>>,
     page: Option<usize>,
     selected: Vec<EditableObject>,
     gesture: Option<Gesture>,
@@ -126,6 +129,7 @@ impl ObjectSelection {
         let generation = doc.edit_generation();
         if self.generation != Some(generation) {
             self.cache.clear();
+            self.path_cache.borrow_mut().clear();
             self.gesture = None;
             let expected = self.pending.take();
             let remapped = self.page.zip(expected).and_then(|(page, expected)| {
@@ -188,6 +192,32 @@ impl ObjectSelection {
         }
         self.cache.entry(page).or_insert_with(|| doc.editable_objects(page)).clone()
     }
+
+    fn ensure_paths(&self, doc: &Document, page: usize) {
+        if self.path_cache.borrow().contains_key(&page) {
+            return;
+        }
+        let paths = doc.page_paths(page).unwrap_or_default();
+        let mut cache = self.path_cache.borrow_mut();
+        if cache.len() >= 8 {
+            cache.clear();
+        }
+        cache.insert(page, paths);
+    }
+
+    /// The topmost painted path under `user` (page user space), if the point is inside it.
+    fn path_at(&self, doc: &Document, page: usize, user: [f64; 2]) -> Option<PathPick> {
+        self.ensure_paths(doc, page);
+        let cache = self.path_cache.borrow();
+        let path = cache.get(&page)?.iter().rev().find(|path| path.contains(user))?;
+        Some(PathPick { index: path.index, paint: path.paint, rect: path.rect })
+    }
+}
+
+struct PathPick {
+    index: usize,
+    paint: usize,
+    rect: [f64; 4],
 }
 
 fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) -> Rect {
@@ -258,14 +288,61 @@ pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, o
     open.filter(|r| on_frame(r.shrink(2.0), p)).map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
 }
 
-/// The object under `p` among the page's `objects`: added content over text over pictures, so a
-/// page-sized background picture does not hide editable labels or added notes, and within each
-/// kind the last, as the single-item tools take it.
-fn object_at(xf: &PageXform, info: &DocInfo, page: usize, objects: &[EditableObject], p: Pos2) -> Option<ObjectTarget> {
-    [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image]
-        .into_iter()
-        .find_map(|kind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)))
-        .map(|o| o.target)
+/// The object under `p` among the page's `objects`: added content over text over artwork, so a
+/// page-sized fill does not hide a label, and between a path and a picture the later paint wins.
+fn object_at(
+    view: &DocView,
+    doc: &Document,
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    objects: &[EditableObject],
+    p: Pos2,
+) -> Option<ObjectTarget> {
+    if let Some(target) = [ObjectKind::Added, ObjectKind::Text].into_iter().find_map(|kind| {
+        objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)).map(|o| o.target)
+    }) {
+        return Some(target);
+    }
+    let (x, y) = xf.screen_to_view(p);
+    let user = info.pages.get(page).map(|page| page.view_to_user(x, y).map(f64::from));
+    let path = user.and_then(|user| view.objects.path_at(doc, page, user));
+    let image = objects.iter().rev().find(|o| o.target.kind == ObjectKind::Image && screen(xf, info, page, o).expand(2.0).contains(p));
+    match (path, image) {
+        (Some(path), Some(image)) => {
+            let image_order = doc.page_images(page).get(image.target.index).map(|image| image.paint_order()).unwrap_or(0);
+            if path.paint > image_order {
+                Some(ObjectTarget { kind: ObjectKind::Path, index: path.index })
+            } else {
+                Some(image.target)
+            }
+        }
+        (Some(path), None) => Some(ObjectTarget { kind: ObjectKind::Path, index: path.index }),
+        (None, Some(image)) => Some(image.target),
+        (None, None) => None,
+    }
+}
+
+/// The painted path under `p`, for a click that selects it.
+pub(crate) fn path_hit(view: &DocView, doc: &Document, xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> Option<(Hit, usize)> {
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let (x, y) = xf.screen_to_view(p);
+    let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
+    let path = view.objects.path_at(doc, page, user)?;
+    Some((Hit::new(Owner::Path { index: path.index }, Layer::Text, egui::CursorIcon::PointingHand), path.paint))
+}
+
+/// Select one object, as a click or a right-click on a path does.
+pub(crate) fn select_target(view: &mut DocView, doc: &Document, page: usize, target: ObjectTarget) {
+    let Ok(objects) = view.objects.inventory(doc, page) else { return };
+    let Some(object) = objects.into_iter().find(|object| object.target == target) else { return };
+    view.objects.page = Some(page);
+    view.objects.selected.clear();
+    view.objects.gesture = None;
+    view.objects.selected.push(object);
+    leave_single(view);
 }
 
 /// What a press with Shift or ⌘ at `p` takes on `page` in Edit text, whatever lies there: the
@@ -275,6 +352,7 @@ fn object_at(xf: &PageXform, info: &DocInfo, page: usize, objects: &[EditableObj
 /// can't be selected together. `None` off the page and outside the pages' visible area (`clip`).
 pub(crate) fn modified_hit(
     view: &DocView,
+    doc: &Document,
     xf: &PageXform,
     info: &DocInfo,
     page: usize,
@@ -289,7 +367,7 @@ pub(crate) fn modified_hit(
         ObjectsPart::Held
     } else {
         match objects {
-            Ok(objects) => ObjectsPart::Toggle(object_at(xf, info, page, objects, p)),
+            Ok(objects) => ObjectsPart::Toggle(object_at(view, doc, xf, info, page, objects, p)),
             Err(_) => ObjectsPart::Refused,
         }
     };
@@ -449,6 +527,18 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
             s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
             return true;
         }
+        // A painted path: select it, and a drag moves it.
+        PagePress::Mine(Owner::Path { index }) => {
+            if let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Path, index }) {
+                s.clear();
+                s.page = Some(page);
+                s.selected.push(object.clone());
+                s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+                leave_single(view);
+                view.current = page;
+            }
+            return true;
+        }
         // The frame of the paragraph open for typing selects its box (for the arrow keys) and
         // moves it.
         PagePress::Mine(Owner::Objects { part: ObjectsPart::Frame }) => {
@@ -555,27 +645,94 @@ pub(crate) fn delete_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocVie
     view.pending_edit = Edit::delete_objects(page, view.objects.selected.iter().map(|o| o.target).collect());
 }
 
-pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
-    if selection.page != Some(page) {
+pub(crate) fn paint(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    doc: &Document,
+    view: &DocView,
+    pointer: Option<Pos2>,
+) {
+    let selection = &view.objects;
+    if selection.page == Some(page) {
+        let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
+        let mut union = Rect::NOTHING;
+        for object in &selection.selected {
+            let rect = screen(xf, info, page, object).translate(delta);
+            painter.rect_filled(rect, 0.0, BLUE.gamma_multiply(0.05));
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
+            union = union.union(rect);
+        }
+        if selection.selected.len() > 1 {
+            painter.rect_stroke(union.expand(4.0), 0.0, Stroke::new(1.0, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+        }
+        if let Some(g) = selection.gesture.filter(|g| g.marquee) {
+            let area = Rect::from_two_pos(g.start, g.now).intersect(xf.rect);
+            painter.rect_filled(area, 0.0, BLUE.gamma_multiply(0.08));
+            painter.rect_stroke(area, 0.0, Stroke::new(1.0, BLUE), egui::StrokeKind::Outside);
+        }
+    }
+    // A path frame only while the pointer is on it, or while it is selected. A table of rules
+    // is not outlined in full.
+    if selection.gesture.is_some() {
         return;
     }
-    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
-    let mut union = Rect::NOTHING;
-    for object in &selection.selected {
-        let rect = screen(xf, info, page, object).translate(delta);
-        painter.rect_filled(rect, 0.0, BLUE.gamma_multiply(0.05));
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
-        union = union.union(rect);
+    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return };
+    let (x, y) = xf.screen_to_view(p);
+    let Some(user) = info.pages.get(page).map(|page| page.view_to_user(x, y).map(f64::from)) else { return };
+    let Some(path) = selection.path_at(doc, page, user) else { return };
+    if selection.selected.iter().any(|object| object.target == ObjectTarget { kind: ObjectKind::Path, index: path.index }) {
+        return;
     }
-    if selection.selected.len() > 1 {
-        painter.rect_stroke(union.expand(4.0), 0.0, Stroke::new(1.0, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+    let rect = xf.user_rect(info, page, path.rect.map(|v| v as f32));
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
+}
+
+/// Delete and recolor for a right-clicked path. Ungroup is not offered: a path is not a Form.
+pub(crate) fn path_context_menu(ui: &mut egui::Ui, view: &mut DocView, doc: &Document, page: usize, index: usize) {
+    let paths = doc.page_paths(page).unwrap_or_default();
+    let path = paths.iter().find(|path| path.index == index);
+    let can_fill = path.is_some_and(|path| path.paints_fill());
+    let can_stroke = path.is_some_and(|path| path.paints_stroke());
+    if ui.add_enabled(true, egui::Button::new(tl!("Delete"))).clicked() {
+        view.pending_edit = Some(Edit::EditPaths { page, indexes: vec![index], change: pdfcraft_engine::PathEdit::Delete });
+        ui.close();
     }
-    if let Some(g) = selection.gesture.filter(|g| g.marquee) {
-        let area = Rect::from_two_pos(g.start, g.now).intersect(xf.rect);
-        painter.rect_filled(area, 0.0, BLUE.gamma_multiply(0.08));
-        painter.rect_stroke(area, 0.0, Stroke::new(1.0, BLUE), egui::StrokeKind::Outside);
+    let swatch = |ui: &mut egui::Ui, view: &mut DocView, fill: bool, rgb: [f64; 3], label: &str| {
+        if ui.button(tl!(label)).clicked() {
+            let change = if fill {
+                pdfcraft_engine::PathEdit::Recolor { fill: Some(rgb), stroke: None }
+            } else {
+                pdfcraft_engine::PathEdit::Recolor { fill: None, stroke: Some(rgb) }
+            };
+            view.pending_edit = Some(Edit::EditPaths { page, indexes: vec![index], change });
+            ui.close();
+        }
+    };
+    if can_fill {
+        ui.menu_button(tl!("Fill colour"), |ui| {
+            for (rgb, label) in SWATCHES {
+                swatch(ui, view, true, rgb, label);
+            }
+        });
+    }
+    if can_stroke {
+        ui.menu_button(tl!("Stroke colour"), |ui| {
+            for (rgb, label) in SWATCHES {
+                swatch(ui, view, false, rgb, label);
+            }
+        });
     }
 }
+
+const SWATCHES: [([f64; 3], &str); 5] = [
+    ([0.0, 0.0, 0.0], "Black"),
+    ([1.0, 1.0, 1.0], "White"),
+    ([0.75, 0.75, 0.75], "Gray"),
+    ([0.08, 0.45, 0.90], "Blue"),
+    ([0.80, 0.10, 0.15], "Red"),
+];
 
 /// Keep the UI refusal actionable and translated; headless callers retain the detailed error.
 pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
@@ -583,6 +740,10 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
     match detail.as_str() {
         "vertical text cannot be moved in a group" => tl!("Vertical text cannot be moved with this selection.").into(),
         "text used as a clipping path cannot be moved in a group" => tl!("Text used as a clipping path cannot be moved with this selection.").into(),
+        "this path also clips other content, so it cannot be moved" => tl!("This path also clips other content, so it cannot be moved.").into(),
+        "this path is interrupted by a graphics-state or text boundary, so it cannot be moved" => {
+            tl!("This path is interrupted by a graphics-state or text boundary, so it cannot be moved.").into()
+        }
         _ => tl!("These objects could not be moved. Select them again and try a smaller move.").into(),
     }
 }
@@ -608,6 +769,10 @@ mod tests {
     #[test]
     fn one_object_deletes_with_its_own_edit_and_none_with_nothing() {
         assert!(matches!(Edit::delete_objects(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
+        assert!(matches!(
+            Edit::delete_objects(1, vec![t(ObjectKind::Path, 2)]),
+            Some(Edit::EditPaths { page: 1, indexes, change: pdfcraft_engine::PathEdit::Delete }) if indexes.as_slice() == [2]
+        ));
         assert!(Edit::delete_objects(0, Vec::new()).is_none());
     }
 
@@ -637,6 +802,8 @@ mod tests {
             rect: [50.0, 60.0, 100.0, 110.0],
             content_type: "image",
             text: None,
+            fill: None,
+            stroke: None,
         });
 
         let ctx = egui::Context::default();

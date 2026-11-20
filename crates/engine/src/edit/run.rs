@@ -166,6 +166,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::PrepareText { .. }
         | Edit::RegisterTextFont { .. }
         | Edit::EditPageImage { .. }
+        | Edit::EditPaths { .. }
         | Edit::Flatten { .. }
         | Edit::FlattenFillSign => {
             if p.modify() {
@@ -932,6 +933,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
+        Edit::EditPaths { page, indexes, change } => pdfcraft_edit::edit_paths(doc, *page, indexes, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
         Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
